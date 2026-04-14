@@ -1,0 +1,119 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 27f66775b64d4330ac7f672167da13bb
+      name: Templates/Storage
+  templates:
+    - uuid: d7dc63bdb97241f09cf5bd16755e1cf9
+      template: HPE Smart Array RAID
+      name: HPE Smart Array RAID
+      description: 'HPE Smart Array P408i-a SR Gen10 RAID monitoring via ssacli'
+      groups:
+        - name: Templates/Storage
+      items:
+        - uuid: 5df7f8787f8f4957b651abbc04b73225
+          name: 'HPE RAID overall status'
+          key: hpe.raid.status
+          type: ZABBIX_ACTIVE
+          value_type: TEXT
+          delay: 5m
+          history: 7d
+          description: 'Returns OK or CRITICAL/WARNING with issue description'
+          tags:
+            - tag: component
+              value: storage
+          triggers:
+            - uuid: 6ef487c916284fa49e2049754f78db31
+              expression: 'find(/HPE Smart Array RAID/hpe.raid.status,,"regexp","^OK$")=0'
+              name: 'HPE RAID status is not OK on {HOST.NAME}'
+              priority: HIGH
+              description: 'RAID controller reports degraded or failed state'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: e130ea7d226148d8b23be37e448dfcd5
+          name: 'HPE RAID logical drives raw'
+          key: hpe.raid.ld.raw
+          type: ZABBIX_ACTIVE
+          value_type: TEXT
+          delay: 5m
+          history: 7d
+          description: 'Raw output of logical drive status'
+          tags:
+            - tag: component
+              value: storage
+          triggers:
+            - uuid: d7d91e96b2534d59b44c4fc7c7f93937
+              expression: 'find(/HPE Smart Array RAID/hpe.raid.ld.raw,,"iregexp","failed|degraded")=1'
+              name: 'HPE RAID logical drive failure on {HOST.NAME}'
+              priority: DISASTER
+              description: 'One or more logical drives in failed or degraded state'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: 1f81484ba3cb44b891ceda3aa51edc0d
+          name: 'HPE RAID physical drives raw'
+          key: hpe.raid.pd.raw
+          type: ZABBIX_ACTIVE
+          value_type: TEXT
+          delay: 5m
+          history: 7d
+          description: 'Raw output of physical drive status'
+          tags:
+            - tag: component
+              value: storage
+          triggers:
+            - uuid: 8cc138e42d8c4789970536502c1b4982
+              expression: 'find(/HPE Smart Array RAID/hpe.raid.pd.raw,,"iregexp","failed")=1'
+              name: 'HPE RAID physical drive failure on {HOST.NAME}'
+              priority: HIGH
+              description: 'One or more physical drives have failed'
+              tags:
+                - tag: scope
+                  value: availability
+            - uuid: 63d1acf74b484f7caa77715c8f4d6480
+              expression: 'find(/HPE Smart Array RAID/hpe.raid.pd.raw,,"iregexp","predictive failure")=1'
+              name: 'HPE RAID physical drive predictive failure on {HOST.NAME}'
+              priority: AVERAGE
+              description: 'Drive reporting predictive failure - replace soon'
+              tags:
+                - tag: scope
+                  value: availability
+        - uuid: c07e1e0eb8bf4008866bbb169ca9b33d
+          name: 'HPE RAID controller temperature'
+          key: hpe.raid.ctrl.temp
+          type: ZABBIX_ACTIVE
+          value_type: FLOAT
+          units: C
+          delay: 10m
+          history: 30d
+          description: 'Controller ASIC temperature in Celsius'
+          tags:
+            - tag: component
+              value: storage
+          triggers:
+            - uuid: 14f32e61e1754be2a3d454bfdae0b743
+              expression: 'last(/HPE Smart Array RAID/hpe.raid.ctrl.temp)>75'
+              name: 'HPE RAID controller temperature high on {HOST.NAME}'
+              priority: WARNING
+              description: 'Controller temperature exceeds 75C'
+              tags:
+                - tag: scope
+                  value: performance
+            - uuid: cedeb81ea66348e7b2df33e960cac694
+              expression: 'last(/HPE Smart Array RAID/hpe.raid.ctrl.temp)>85'
+              name: 'HPE RAID controller temperature critical on {HOST.NAME}'
+              priority: HIGH
+              description: 'Controller temperature exceeds 85C'
+              tags:
+                - tag: scope
+                  value: performance
+      dashboards: []
+      discovery_rules: []
+      httptests: []
+      macros: []
+      tags:
+        - tag: class
+          value: storage
+        - tag: target
+          value: hpe
