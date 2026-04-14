@@ -52,7 +52,7 @@ The installer will:
 
 ## Zabbix template
 
-Import `hpe_raid_zabbix_template.yaml` into your Zabbix server:
+Import `HPE_RAID_Zabbix_template.yaml` into your Zabbix server:
 
 **Configuration → Templates → Import**
 
