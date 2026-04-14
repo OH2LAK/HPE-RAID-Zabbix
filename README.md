@@ -7,6 +7,7 @@ Tested on:
 - Proxmox VE 8.x (Debian 12 bookworm)
 - Proxmox VE 9.x (Debian 13 trixie)
 - Zabbix Agent2 7.0 LTS
+- Zabbix Server 7.0 LTS
 
 Should work on any HPE server with a PQI-based Smart Array controller and a Debian-based OS.
 
