@@ -1,125 +1,102 @@
-# HPE Smart Array RAID Monitoring for Zabbix
+# hpe-raid-zabbix
 
-Installs and configures monitoring for HPE Smart Array RAID controllers using `ssacli` and Zabbix Agent2.
+Monitor HPE Smart Array RAID controllers (via `ssacli`) with Zabbix Agent2 —
+no proprietary HPE monitoring agent required.
 
 Tested on:
 - HPE Smart Array P408i-a SR Gen10
-- Proxmox VE 8.x (Debian 12 bookworm)
-- Proxmox VE 9.x (Debian 13 trixie)
+- Proxmox VE 8.x (Debian 12 bookworm) and 9.x (Debian 13 trixie)
 - Zabbix Agent2 7.0 LTS
-- Zabbix Server 7.0 LTS
 
-Should work on any HPE server with a PQI-based Smart Array controller and a Debian-based OS.
+Should work on any HPE (or Adaptec-based) Smart Array controller on a
+Debian-based OS, as long as `ssacli` is installed.
 
----
+## What this gives you
 
-## What it does
+- An aggregated `OK` / `WARNING` / `CRITICAL` health status item, with
+  triggers already wired up
+- Raw logical/physical drive status text (for drilling into an alert)
+- Controller ASIC temperature
+- A `sudo`-based setup so Zabbix Agent2 (running as the unprivileged
+  `zabbix` user) can call `ssacli`, which normally requires root
 
-- Installs the HPE MCP repository and `ssacli`
-- Detects the controller slot automatically
-- Installs a health check script (`/usr/local/bin/hpe_raid_check.sh`)
-- Configures Zabbix Agent2 UserParameters
-- Sets up sudoers so the Zabbix agent can run `ssacli` without a password
+## A note on the sudoers path
 
----
+`ssacli` is usually installed to `/usr/sbin/ssacli`, **not** `/usr/bin/ssacli`.
+If the path in your sudoers rule doesn't exactly match the path actually
+invoked by the script or the UserParameters, `sudo` silently falls back to
+requiring a password — which fails for the `zabbix` user with no console —
+and the item just returns nothing useful. The installer below detects the
+real path with `command -v ssacli` and writes it consistently everywhere,
+but if you ever move ssacli or install manually, keep this in mind.
 
-## Requirements
-
-- Debian 12/13 or Proxmox VE 8/9
-- Zabbix Agent2 installed and configured
-- Root access
-- Internet access to download HPE packages
-
----
-
-## Installation
+## Install
 
 ```bash
-wget https://raw.githubusercontent.com/oh2lak/hpe-raid-zabbix/main/install_hpe_raid_monitor.sh
-chmod +x install_hpe_raid_monitor.sh
+git clone https://github.com/OH2LAK/hpe-raid-zabbix.git
+cd hpe-raid-zabbix
 sudo ./install_hpe_raid_monitor.sh
 ```
 
 The installer will:
-1. Check for an HPE controller via `lspci`
-2. Add the HPE SDR repository and install `ssacli`
-3. Detect the controller slot number
-4. Install the health check script
-5. Configure Zabbix UserParameters
-6. Restart the Zabbix agent
-7. Run a self-test
+1. Locate `ssacli` and detect the controller slot
+2. Install `/usr/local/bin/hpe_raid_check.sh`
+3. Write `/etc/sudoers.d/zabbix-ssacli` (validated with `visudo -cf` before use)
+4. Write `/etc/zabbix/zabbix_agent2.d/hpe_raid.conf`
+5. Restart Zabbix Agent2
+6. Run a self-test as the `zabbix` user to confirm sudo works end-to-end
 
----
+## Manual install
+
+If you'd rather not run the installer, copy the pieces yourself:
+
+| File | Destination |
+|---|---|
+| `scripts/hpe_raid_check.sh` | `/usr/local/bin/hpe_raid_check.sh` (`chmod +x`) |
+| `sudoers/zabbix-ssacli` | `/etc/sudoers.d/zabbix-ssacli` (`chmod 440`) |
+| `userparameter/hpe_raid.conf` | `/etc/zabbix/zabbix_agent2.d/hpe_raid.conf` |
+
+Then `systemctl restart zabbix-agent2`.
+
+**Before copying manually**, run `which ssacli` and make sure the path
+matches in all three files — the manual copies default to `/usr/sbin/ssacli`.
 
 ## Zabbix template
 
-Import `HPE_RAID_Zabbix_template.yaml` into your Zabbix server:
+Import `templates/hpe_raid_zabbix_template.yaml` under
+**Data collection → Templates → Import**, then link it to your host under
+**Data collection → Hosts → *host* → Templates**.
 
-**Configuration → Templates → Import**
+> The UUIDs in the shipped YAML were hand-written for portability. If you'd
+> rather have Zabbix generate fresh, guaranteed-unique UUIDs, build the
+> items manually once in the UI (using the item keys below) and export the
+> template yourself — that's the more robust path for a production instance.
 
-Then link the template to your host:
+### Item keys
 
-**Configuration → Hosts → [your host] → Templates → HPE Smart Array RAID**
-
-### Items
-
-| Item | Key | Interval | Description |
-|---|---|---|---|
-| HPE RAID overall status | `hpe.raid.status` | 5 min | Returns `OK` or `CRITICAL`/`WARNING` with details |
-| HPE RAID logical drives | `hpe.raid.ld.raw` | 5 min | Raw logical drive status output |
-| HPE RAID physical drives | `hpe.raid.pd.raw` | 5 min | Raw physical drive status output |
-| HPE RAID controller temp | `hpe.raid.ctrl.temp` | 10 min | Controller ASIC temperature in °C |
-
-### Triggers
-
-| Trigger | Severity | Condition |
+| Key | Type | Description |
 |---|---|---|
-| RAID status is not OK | High | `hpe.raid.status` does not match `^OK$` |
-| Logical drive failure | Disaster | Output contains `failed` or `degraded` |
-| Physical drive failure | High | Output contains `failed` |
-| Predictive drive failure | Average | Output contains `predictive failure` |
-| Controller temp high | Warning | Temperature > 75°C |
-| Controller temp critical | High | Temperature > 85°C |
+| `hpe.raid.status` | Text | Aggregated OK/WARNING/CRITICAL |
+| `hpe.raid.ld.raw` | Text | Raw logical drive status |
+| `hpe.raid.pd.raw` | Text | Raw physical drive status |
+| `hpe.raid.ctrl.temp` | Float | Controller ASIC temperature (°C) |
 
----
-
-## Manual testing
-
-After installation, test the UserParameters directly:
+## Verifying it works
 
 ```bash
-zabbix_agent2 -t hpe.raid.status
-zabbix_agent2 -t hpe.raid.ld.raw
-zabbix_agent2 -t hpe.raid.pd.raw
-zabbix_agent2 -t hpe.raid.ctrl.temp
+su -s /bin/bash zabbix -c "sudo /usr/local/bin/hpe_raid_check.sh"
 ```
 
-Or run the health check script directly:
-
-```bash
-/usr/local/bin/hpe_raid_check.sh
-```
-
-Expected output when healthy: `OK`
-
----
-
-## Files installed
-
-| File | Description |
-|---|---|
-| `/usr/local/bin/hpe_raid_check.sh` | Health check script |
-| `/etc/zabbix/zabbix_agent2.d/hpe_raid.conf` | Zabbix UserParameters |
-| `/etc/sudoers.d/zabbix-ssacli` | Sudoers rule for Zabbix agent |
-| `/etc/apt/sources.list.d/hpe-mcp.list` | HPE MCP repository |
-| `/usr/share/keyrings/hpe-mcp.gpg` | HPE GPG keys |
-
----
+Should print `OK` (or `WARNING: ...` / `CRITICAL: ...`) with no password
+prompt. If you get a password prompt or "command not allowed", the ssacli
+path in `/etc/sudoers.d/zabbix-ssacli` doesn't match the actual `ssacli`
+location — see the note above.
 
 ## License
 
-MIT
+MIT — use it, fork it, improve it.
 
-## Author
+## Contributing
 
-OH2LAK — [oh2lak.radio](https://oh2lak.radio)
+Issues and PRs welcome, especially for other HPE Smart Array models/slots
+or non-Debian distros.
