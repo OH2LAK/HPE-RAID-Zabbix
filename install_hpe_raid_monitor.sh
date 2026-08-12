@@ -1,105 +1,67 @@
 #!/bin/bash
-# HPE Smart Array RAID Monitoring Installer
-#
-# Installs ssacli + Zabbix Agent2 UserParameters + health check script
-# for HPE Smart Array controllers (P408i-a, P816i-a, and other PQI-based controllers)
+# install_hpe_raid_monitor.sh
+# Installs HPE Smart Array RAID monitoring for Zabbix Agent2.
+# https://github.com/OH2LAK/hpe-raid-zabbix
 #
 # Tested on:
-#   - Proxmox VE 8.x (Debian 12 bookworm)
-#   - Proxmox VE 9.x (Debian 13 trixie)
-#   - Zabbix Agent2 7.x
+#   - HPE Smart Array P408i-a SR Gen10
+#   - Proxmox VE 8.x (Debian 12 bookworm) and 9.x (Debian 13 trixie)
+#   - Zabbix Agent2 7.0 LTS
 #
-# Usage:
-#   chmod +x install_hpe_raid_monitor.sh
-#   sudo ./install_hpe_raid_monitor.sh
-#
-# After installation, link the Zabbix template to the host:
-#   Configuration -> Hosts -> [this host] -> Templates -> HPE Smart Array RAID
-#
-# https://github.com/oh2lak/HPE-RAID-Zabbix
+# Should work on any HPE server with a PQI/Adaptec-based Smart Array
+# controller on a Debian-based OS.
 
 set -e
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-log()  { echo -e "${GREEN}[OK]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-fail() { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
+log()  { echo "[OK]   $1"; }
+warn() { echo "[WARN] $1"; }
+err()  { echo "[FAIL] $1"; exit 1; }
 
 echo "================================================"
-echo " HPE Smart Array RAID Monitor - Installer"
+echo " HPE Smart Array RAID monitoring - installer"
 echo "================================================"
 echo ""
 
-# --- Preflight checks ---
-
-if [ "$EUID" -ne 0 ]; then
-    fail "Please run as root: sudo $0"
+# --- Must be root ---
+if [ "$(id -u)" -ne 0 ]; then
+    err "This script must be run as root."
 fi
 
-# Check for HPE controller
-if ! lspci 2>/dev/null | grep -qi "smart array\|hpe.*raid\|hewlett.*raid\|smart storage pqi\|adaptec smart"; then
-    warn "No HPE Smart Array controller detected via lspci."
-    read -rp "Continue anyway? (y/n): " CONT
-    [[ "$CONT" =~ ^[Yy]$ ]] || exit 0
+# --- Detect ssacli ---
+echo ">>> Locating ssacli..."
+SSACLI_PATH="$(command -v ssacli || true)"
+
+if [ -z "$SSACLI_PATH" ]; then
+    err "ssacli not found. Install the HPE Smart Storage Administrator CLI (ssacli) first: https://support.hpe.com"
 fi
+log "Found ssacli at: ${SSACLI_PATH}"
 
-# Check for Zabbix Agent2
-if ! systemctl list-units --type=service 2>/dev/null | grep -q "zabbix-agent2"; then
-    warn "zabbix-agent2 service not found."
-    warn "UserParameter will be installed anyway - start the agent manually later."
-    ZABBIX_PRESENT=0
-else
-    ZABBIX_PRESENT=1
+# --- Detect controller presence (sanity check) ---
+if ! lspci | grep -qiE "smart storage pqi|adaptec smart|smart array"; then
+    warn "No HPE/Adaptec Smart Array controller detected via lspci. Continuing anyway, but double-check this is the right host."
 fi
-
-# --- HPE repository and ssacli ---
-
-echo ""
-echo ">>> Installing ssacli..."
-
-# HPE repository supports up to bookworm - use it for trixie as well
-HPE_DIST="bookworm"
-log "Using HPE repository: ${HPE_DIST}"
-
-# Download and install GPG keys
-curl -fsSL \
-    https://downloads.linux.hpe.com/SDR/hpePublicKey2048_key1.pub \
-    https://downloads.linux.hpe.com/SDR/hpePublicKey2048_key2.pub | \
-    gpg --dearmor > /usr/share/keyrings/hpe-mcp.gpg 2>/dev/null || \
-    fail "Failed to download HPE GPG keys"
-
-log "HPE GPG keys installed"
-
-# Add repository
-echo "deb [signed-by=/usr/share/keyrings/hpe-mcp.gpg] https://downloads.linux.hpe.com/SDR/repo/mcp ${HPE_DIST}/current non-free" \
-    > /etc/apt/sources.list.d/hpe-mcp.list
-
-# Install ssacli
-apt-get update -qq 2>/dev/null
-apt-get install -y ssacli 2>/dev/null || fail "Failed to install ssacli"
-
-log "ssacli installed: $(ssacli version 2>/dev/null | head -1 || echo 'OK')"
 
 # --- Detect controller slot ---
-
 echo ""
-echo ">>> Detecting HPE controller..."
-
-SLOT=$(ssacli ctrl all show 2>/dev/null | grep -oP 'Slot \K[0-9]+' | head -1)
-
+echo ">>> Detecting controller slot..."
+SLOT="$("$SSACLI_PATH" ctrl all show config 2>/dev/null | grep -oP 'Slot \K[0-9]+' | head -1)"
 if [ -z "$SLOT" ]; then
-    warn "No controller found via ssacli. Defaulting to slot=0."
+    warn "Could not auto-detect controller slot. Defaulting to slot=0."
     SLOT=0
 else
     log "Controller found in slot: ${SLOT}"
 fi
 
-# --- Install health check script ---
+# --- Detect Zabbix agent presence ---
+ZABBIX_PRESENT=0
+if systemctl list-unit-files 2>/dev/null | grep -q zabbix-agent2; then
+    ZABBIX_PRESENT=1
+    log "zabbix-agent2 detected"
+else
+    warn "zabbix-agent2 not detected - the UserParameter file will still be installed, but you'll need to install and configure Zabbix Agent2 separately."
+fi
 
+# --- Install health check script ---
 echo ""
 echo ">>> Installing health check script..."
 
@@ -107,27 +69,26 @@ cat > /usr/local/bin/hpe_raid_check.sh << EOF
 #!/bin/bash
 # HPE Smart Array RAID health check
 # Generated by install_hpe_raid_monitor.sh
+# ssacli path is hardcoded to match the sudoers rule created by this installer.
 
+SSACLI="${SSACLI_PATH}"
 SLOT=${SLOT}
 STATUS="OK"
 ISSUES=""
 
-# Check logical drives
-LD=\$(ssacli ctrl slot=\$SLOT ld all show status 2>/dev/null)
+LD=\$(\$SSACLI ctrl slot=\$SLOT ld all show status 2>/dev/null)
 if echo "\$LD" | grep -qiE "failed|degraded"; then
     STATUS="CRITICAL"
     ISSUES+="\$(echo "\$LD" | grep -iE 'failed|degraded' | xargs) "
 fi
 
-# Check physical drives
-PD=\$(ssacli ctrl slot=\$SLOT pd all show status 2>/dev/null)
+PD=\$(\$SSACLI ctrl slot=\$SLOT pd all show status 2>/dev/null)
 if echo "\$PD" | grep -qiE "failed|predictive failure"; then
     STATUS="CRITICAL"
     ISSUES+="\$(echo "\$PD" | grep -iE 'failed|predictive' | xargs) "
 fi
 
-# Check cache / battery
-CACHE=\$(ssacli ctrl slot=\$SLOT show detail 2>/dev/null)
+CACHE=\$(\$SSACLI ctrl slot=\$SLOT show detail 2>/dev/null)
 if echo "\$CACHE" | grep -qiE "battery/capacitor status: failed"; then
     STATUS="WARNING"
     ISSUES+="Battery/Cache failed "
@@ -140,17 +101,25 @@ chmod +x /usr/local/bin/hpe_raid_check.sh
 log "Health check script: /usr/local/bin/hpe_raid_check.sh"
 
 # --- Sudoers ---
+echo ""
+echo ">>> Configuring sudoers..."
 
 cat > /etc/sudoers.d/zabbix-ssacli << EOF
-zabbix ALL=(root) NOPASSWD: /usr/bin/ssacli
+zabbix ALL=(root) NOPASSWD: ${SSACLI_PATH}
 zabbix ALL=(root) NOPASSWD: /usr/local/bin/hpe_raid_check.sh
 EOF
 chmod 440 /etc/sudoers.d/zabbix-ssacli
-log "Sudoers rule: /etc/sudoers.d/zabbix-ssacli"
+
+# Validate the sudoers file before relying on it
+if ! visudo -cf /etc/sudoers.d/zabbix-ssacli > /dev/null 2>&1; then
+    err "Generated sudoers file failed validation - check /etc/sudoers.d/zabbix-ssacli manually."
+fi
+log "Sudoers rule: /etc/sudoers.d/zabbix-ssacli (path matches ssacli at ${SSACLI_PATH})"
 
 # --- Zabbix UserParameters ---
+echo ""
+echo ">>> Installing Zabbix UserParameters..."
 
-# Find conf.d directory
 ZABBIX_CONFD=""
 for DIR in \
     /etc/zabbix/zabbix_agent2.d \
@@ -170,33 +139,32 @@ fi
 
 cat > "${ZABBIX_CONFD}/hpe_raid.conf" << EOF
 UserParameter=hpe.raid.status,sudo /usr/local/bin/hpe_raid_check.sh
-UserParameter=hpe.raid.ld.raw,sudo ssacli ctrl slot=${SLOT} ld all show status 2>/dev/null
-UserParameter=hpe.raid.pd.raw,sudo ssacli ctrl slot=${SLOT} pd all show status 2>/dev/null
-UserParameter=hpe.raid.ctrl.temp,sudo ssacli ctrl slot=${SLOT} show detail 2>/dev/null | grep -A2 "Location: ASIC" | grep "Current Value" | awk '{print \$4}'
+UserParameter=hpe.raid.ld.raw,sudo ${SSACLI_PATH} ctrl slot=${SLOT} ld all show status 2>/dev/null
+UserParameter=hpe.raid.pd.raw,sudo ${SSACLI_PATH} ctrl slot=${SLOT} pd all show status 2>/dev/null
+UserParameter=hpe.raid.ctrl.temp,sudo ${SSACLI_PATH} ctrl slot=${SLOT} show detail 2>/dev/null | grep -A2 "Location: ASIC" | grep "Current Value" | awk '{print \$4}'
 EOF
 
 log "UserParameters: ${ZABBIX_CONFD}/hpe_raid.conf"
 
 # --- Restart Zabbix agent ---
-
 if [ "$ZABBIX_PRESENT" -eq 1 ]; then
     systemctl restart zabbix-agent2 2>/dev/null || \
     systemctl restart zabbix-agent 2>/dev/null || \
-    warn "Could not restart Zabbix agent - please restart it manually"
+    warn "Could not restart Zabbix agent - please restart it manually."
     log "Zabbix agent restarted"
 fi
 
 # --- Self-test ---
-
 echo ""
 echo ">>> Running self-test..."
 sleep 1
 
-RESULT=$(/usr/local/bin/hpe_raid_check.sh 2>/dev/null)
+RESULT=$(su -s /bin/bash zabbix -c "sudo /usr/local/bin/hpe_raid_check.sh" 2>&1 || true)
 if [[ "$RESULT" == OK* ]]; then
-    log "Self-test passed: ${RESULT}"
+    log "Self-test passed (run as zabbix user via sudo): ${RESULT}"
 else
     warn "Self-test returned: ${RESULT}"
+    warn "If this mentions a password prompt or 'not allowed', double-check that ${SSACLI_PATH} matches the path in /etc/sudoers.d/zabbix-ssacli exactly."
 fi
 
 echo ""
@@ -204,11 +172,12 @@ echo "================================================"
 echo " Installation complete!"
 echo "================================================"
 echo ""
-echo " Health check:  /usr/local/bin/hpe_raid_check.sh"
-echo " UserParameter: ${ZABBIX_CONFD}/hpe_raid.conf"
-echo " RAID slot:     ${SLOT}"
+echo " Health check:   /usr/local/bin/hpe_raid_check.sh"
+echo " UserParameter:  ${ZABBIX_CONFD}/hpe_raid.conf"
+echo " ssacli path:    ${SSACLI_PATH}"
+echo " RAID slot:      ${SLOT}"
 echo ""
 echo " Next step: link the Zabbix template to this host:"
-echo " Configuration -> Hosts -> $(hostname) -> Templates"
+echo " Data collection -> Hosts -> $(hostname) -> Templates"
 echo " -> HPE Smart Array RAID"
 echo ""
