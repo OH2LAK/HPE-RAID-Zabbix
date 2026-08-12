@@ -1,0 +1,12 @@
+# hpe-raid-zabbix sudoers rule
+# Install to: /etc/sudoers.d/zabbix-ssacli (chmod 440)
+#
+# IMPORTANT: the path here must exactly match the path used in
+# hpe_raid_check.sh and in the UserParameter definitions. If ssacli is
+# installed somewhere else on your system, run `which ssacli` and update
+# ALL THREE places (this file, the health check script, and
+# userparameter/hpe_raid.conf) to match. A mismatch causes sudo to require
+# a password even with NOPASSWD, which fails silently for the zabbix user.
+
+zabbix ALL=(root) NOPASSWD: /usr/sbin/ssacli
+zabbix ALL=(root) NOPASSWD: /usr/local/bin/hpe_raid_check.sh
