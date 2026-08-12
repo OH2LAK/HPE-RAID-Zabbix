@@ -1,0 +1,67 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 7df96b18c230490a9a0a9c1e262f4c17
+      name: Templates/Hardware
+  templates:
+    - uuid: 3a1b4e9f6a1d4a1c9b7e2f5d8c6a4b3e
+      template: 'HPE Smart Array RAID'
+      name: 'HPE Smart Array RAID'
+      description: |
+        Monitors HPE Smart Array RAID controllers via ssacli, run through
+        a sudo-wrapped health check script and raw UserParameters.
+        Requires: hpe-raid-zabbix (https://github.com/OH2LAK/hpe-raid-zabbix)
+      groups:
+        - name: Templates/Hardware
+      items:
+        - uuid: 1f2a3b4c5d6e7f8091a2b3c4d5e6f701
+          name: 'RAID overall status'
+          type: ZABBIX_ACTIVE
+          key: hpe.raid.status
+          delay: 5m
+          history: 7d
+          trends: '0'
+          value_type: TEXT
+          description: 'Aggregated OK/WARNING/CRITICAL status from hpe_raid_check.sh'
+          triggers:
+            - uuid: 2a3b4c5d6e7f8091a2b3c4d5e6f70112
+              expression: 'find(/HPE Smart Array RAID/hpe.raid.status,,"like","CRITICAL")=1'
+              name: 'RAID status is CRITICAL on {HOST.NAME}'
+              priority: HIGH
+            - uuid: 3b4c5d6e7f8091a2b3c4d5e6f7011223
+              expression: 'find(/HPE Smart Array RAID/hpe.raid.status,,"like","WARNING")=1'
+              name: 'RAID status is WARNING (battery/cache) on {HOST.NAME}'
+              priority: WARNING
+        - uuid: 4c5d6e7f8091a2b3c4d5e6f701122334
+          name: 'Logical drives raw status'
+          type: ZABBIX_ACTIVE
+          key: hpe.raid.ld.raw
+          delay: 5m
+          history: 7d
+          trends: '0'
+          value_type: TEXT
+          description: 'Raw output of: ssacli ctrl slot=N ld all show status'
+        - uuid: 5d6e7f8091a2b3c4d5e6f70112233445
+          name: 'Physical drives raw status'
+          type: ZABBIX_ACTIVE
+          key: hpe.raid.pd.raw
+          delay: 5m
+          history: 7d
+          trends: '0'
+          value_type: TEXT
+          description: 'Raw output of: ssacli ctrl slot=N pd all show status'
+        - uuid: 6e7f8091a2b3c4d5e6f7011223344556
+          name: 'Controller ASIC temperature'
+          type: ZABBIX_ACTIVE
+          key: hpe.raid.ctrl.temp
+          delay: 5m
+          history: 7d
+          trends: 90d
+          value_type: FLOAT
+          units: C
+          description: 'Controller ASIC temperature parsed from ssacli show detail'
+          triggers:
+            - uuid: 7f8091a2b3c4d5e6f701122334455667
+              expression: 'last(/HPE Smart Array RAID/hpe.raid.ctrl.temp)>75'
+              name: 'RAID controller ASIC temperature high on {HOST.NAME} ({ITEM.LASTVALUE})'
+              priority: WARNING
